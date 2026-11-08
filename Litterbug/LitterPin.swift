@@ -1,7 +1,7 @@
 import Foundation
 import CoreLocation
 
-struct LitterPin: Identifiable, Decodable {
+struct LitterPin: Identifiable, Equatable {
     let id: String
     let lat: Double
     let lon: Double
@@ -19,13 +19,4 @@ struct LitterPin: Identifiable, Decodable {
         default: "trash.fill"
         }
     }
-}
-
-extension LitterPin {
-    static let samples: [LitterPin] = [
-        LitterPin(id: "1", lat: 37.3362, lon: -122.0105, type: "bottle"),
-        LitterPin(id: "2", lat: 37.3338, lon: -122.0071, type: "can"),
-        LitterPin(id: "3", lat: 37.3331, lon: -122.0112, type: "bag"),
-        LitterPin(id: "4", lat: 37.3371, lon: -122.0068, type: "wrapper"),
-    ]
 }

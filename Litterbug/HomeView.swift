@@ -1,10 +1,22 @@
 import SwiftUI
 @_spi(Restricted) import MapboxMaps
 
+enum MapMode {
+    case doodle, standard, threeD
+
+    var viewport: Viewport {
+        switch self {
+        case .doodle, .standard: .followPuck(zoom: 15.5, bearing: .constant(0))
+        case .threeD: .followPuck(zoom: 16.5, bearing: .constant(-20), pitch: 60)
+        }
+    }
+}
+
 struct HomeView: View {
-    @State private var viewport: Viewport = .followPuck(zoom: 15.5, bearing: .constant(0))
+    @State private var mode: MapMode = .threeD
+    @State private var viewport: Viewport = MapMode.threeD.viewport
     @State private var locationManager = CLLocationManager()
-    @State private var pins = LitterPin.samples
+    @State private var store = LitterStore()
 
     private static let doodleStyle: MapStyle = {
         guard let url = Bundle.main.url(forResource: "DoodleStyle", withExtension: "json"),
@@ -17,8 +29,28 @@ struct HomeView: View {
         logo.visibility = .hidden
         var attribution = AttributionButtonOptions()
         attribution.visibility = .hidden
-        return OrnamentOptions(scaleBar: ScaleBarViewOptions(visibility: .hidden), logo: logo, attributionButton: attribution)
+        return OrnamentOptions(
+            scaleBar: ScaleBarViewOptions(visibility: .hidden),
+            compass: CompassViewOptions(visibility: .hidden),
+            logo: logo,
+            attributionButton: attribution
+        )
     }()
+
+    private var mapStyle: MapStyle {
+        switch mode {
+        case .doodle: Self.doodleStyle
+        case .standard: .standard(show3dObjects: false)
+        case .threeD: .standard(show3dObjects: true)
+        }
+    }
+
+    private func switchTo(_ newMode: MapMode) {
+        mode = newMode
+        withViewportAnimation(.easeOut(duration: 0.8)) {
+            viewport = newMode.viewport
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -26,15 +58,27 @@ struct HomeView: View {
 
             Map(viewport: $viewport) {
                 Puck2D()
-                ForEvery(pins) { pin in
+                ForEvery(store.pins) { pin in
                     MapViewAnnotation(coordinate: pin.coordinate) {
                         PinView(pin: pin)
                     }
                     .allowOverlap(true)
                 }
             }
-            .mapStyle(Self.doodleStyle)
+            .mapStyle(mapStyle)
             .ornamentOptions(Self.ornaments)
+            .overlay(alignment: .bottomTrailing) {
+                if viewport.followPuck == nil {
+                    RecenterButton {
+                        withViewportAnimation(.easeOut(duration: 0.6)) {
+                            viewport = mode.viewport
+                        }
+                    }
+                    .padding(12)
+                    .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: viewport.followPuck == nil)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .frame(maxHeight: .infinity)
             .padding(.top, 12)
@@ -46,10 +90,36 @@ struct HomeView: View {
         }
         .padding(.horizontal, 30)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            KeyCatcher(actions: [
+                "1": { switchTo(.doodle) },
+                "2": { switchTo(.standard) },
+                "3": { switchTo(.threeD) },
+            ])
+        }
         .background(Color.appBackground)
         .onAppear {
             locationManager.requestWhenInUseAuthorization()
         }
+        .task {
+            await store.poll()
+        }
+    }
+}
+
+struct RecenterButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "location.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Color.appBackground)
+                .frame(width: 44, height: 44)
+                .background(WobblyCircle().fill(.white))
+                .shadow(color: .black.opacity(0.2), radius: 3, y: 2)
+        }
+        .buttonStyle(.plain)
     }
 }
 
