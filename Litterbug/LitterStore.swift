@@ -4,15 +4,12 @@ import Observation
 @MainActor
 @Observable
 final class LitterStore {
-    var pins: [LitterPin] = []
+    /// Shared so pins survive tab switches (HomeView is rebuilt each time).
+    static let shared = LitterStore()
 
-    private let collectionURL: URL? = {
-        guard let url = Bundle.main.url(forResource: "GoogleService-Info", withExtension: "plist"),
-              let config = NSDictionary(contentsOf: url),
-              let projectID = config["PROJECT_ID"] as? String,
-              let apiKey = config["API_KEY"] as? String else { return nil }
-        return URL(string: "https://firestore.googleapis.com/v1/projects/\(projectID)/databases/(default)/documents/litter?pageSize=300&key=\(apiKey)")
-    }()
+    var pins: [LitterPin] = []
+    /// Consecutive days (ending today, or yesterday if nothing yet today) with at least one cleanup.
+    var streak = 0
 
     func poll(every interval: Duration = .seconds(2)) async {
         while !Task.isCancelled {
@@ -21,41 +18,83 @@ final class LitterStore {
         }
     }
 
-    private func refresh() async {
-        guard let collectionURL,
-              let (data, _) = try? await URLSession.shared.data(from: collectionURL),
-              let response = try? JSONDecoder().decode(FirestoreList.self, from: data) else { return }
-        let latest = (response.documents ?? []).compactMap(LitterPin.init(document:))
-        if latest != pins {
-            pins = latest
+    func refresh() async {
+        guard let latest = await fetch(), latest != pins else { return }
+        pins = latest
+    }
+
+    /// Manual refresh: fetch, then clear and repopulate so pins and rows visibly pop back in.
+    func reload() async {
+        guard let latest = await fetch() else { return }
+        pins = []
+        try? await Task.sleep(for: .milliseconds(200))
+        pins = latest
+    }
+
+    /// Demo reset: every placed piece (tagged with `demoType`) that has been picked up goes back on
+    /// the map as it was — open, original type, no photo or cleanup info. Seeded history is untouched.
+    /// Returns how many pieces were restored.
+    func resetDemoPieces() async throws -> Int {
+        let documents = try await FirestoreClient.shared.list("litter", fields: ["demoType", "status"])
+        let picked = documents.filter { $0["demoType"] != nil && $0["status"]?.stringValue == "cleaned" }
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for document in picked {
+                let type = document["demoType"]?.stringValue ?? "litter"
+                group.addTask {
+                    try await FirestoreClient.shared.update(
+                        "litter", id: document.id,
+                        fields: ["status": .string("open"), "type": .string(type)],
+                        deleting: ["photo", "place", "cleanedAt", "cleanedBy", "bboxX", "bboxY", "bboxSize"]
+                    )
+                }
+            }
+            try await group.waitForAll()
         }
+        await reload()
+        return picked.count
+    }
+
+    private func fetch() async -> [LitterPin]? {
+        #if DEBUG
+        // Launch with LITTER_DEMO=1 to show sample pins without reading Firestore.
+        if ProcessInfo.processInfo.environment["LITTER_DEMO"] != nil {
+            let center = (lat: 42.1302, lon: -75.9030)
+            let offsets: [(String, Double, Double)] = [
+                ("cup", 0.0001, 0.0001), ("bottle", 0.0004, -0.0003), ("can", -0.0003, 0.0003),
+                ("bag", 0.0001, -0.0006), ("wrapper", -0.0005, -0.0002), ("litter", 0.0006, 0.0004),
+            ]
+            return offsets.map { LitterPin(id: "demo-\($0.0)", lat: center.lat + $0.1, lon: center.lon + $0.2, type: $0.0) }
+        }
+        #endif
+        guard let documents = try? await FirestoreClient.shared.list("litter", fields: ["lat", "lon", "type", "status", "cleanedAt", "cleanedBy"]) else { return nil }
+        // Streak is the signed-in account's own cleanups.
+        let me = AccountStore.shared.currentID
+        let mine = documents.filter { $0["status"]?.stringValue == "cleaned" && $0["cleanedBy"]?.stringValue == me }
+        let days = Self.streak(from: mine.compactMap { $0["cleanedAt"]?.date })
+        if days != streak { streak = days }
+        return documents
+            .filter { $0["status"]?.stringValue != "cleaned" }
+            .compactMap(LitterPin.init(document:))
     }
 }
 
-private struct FirestoreList: Decodable {
-    let documents: [FirestoreDocument]?
-}
-
-private struct FirestoreDocument: Decodable {
-    let name: String
-    let fields: [String: FirestoreValue]
-}
-
-private struct FirestoreValue: Decodable {
-    let doubleValue: Double?
-    let integerValue: String?
-    let stringValue: String?
-
-    var number: Double? {
-        doubleValue ?? integerValue.flatMap(Double.init)
+extension LitterStore {
+    static func streak(from dates: [Date], calendar: Calendar = .current, now: Date = .now) -> Int {
+        let days = Set(dates.map { calendar.startOfDay(for: $0) })
+        var day = calendar.startOfDay(for: now)
+        if !days.contains(day) { day = calendar.date(byAdding: .day, value: -1, to: day)! }
+        var count = 0
+        while days.contains(day) {
+            count += 1
+            day = calendar.date(byAdding: .day, value: -1, to: day)!
+        }
+        return count
     }
 }
 
 private extension LitterPin {
     init?(document: FirestoreDocument) {
-        guard let lat = document.fields["lat"]?.number,
-              let lon = document.fields["lon"]?.number,
-              let id = document.name.split(separator: "/").last else { return nil }
-        self.init(id: String(id), lat: lat, lon: lon, type: document.fields["type"]?.stringValue ?? "litter")
+        guard let lat = document["lat"]?.number, let lon = document["lon"]?.number else { return nil }
+        self.init(id: document.id, lat: lat, lon: lon, type: document["type"]?.stringValue ?? "litter")
     }
 }

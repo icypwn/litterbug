@@ -4,5 +4,8 @@ service cloud.firestore {
     match /litter/{id} {
       allow read, write: if request.time < timestamp.date(2026, 12, 31);
     }
+    match /users/{id} {
+      allow read, write: if request.time < timestamp.date(2026, 12, 31);
+    }
   }
 }

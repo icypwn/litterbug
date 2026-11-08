@@ -25,6 +25,21 @@ struct LitterbugApp: App {
         WindowGroup {
             ContentView()
                 .environment(\.managedObjectContext, persistenceController.container.viewContext)
+                .background(WindowBackground())
+        }
+    }
+}
+
+/// Paints the window itself green, so anything that briefly shrinks away (zoom transitions) reveals
+/// the app's background instead of black.
+private struct WindowBackground: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView { Probe() }
+    func updateUIView(_ uiView: UIView, context: Context) {}
+
+    final class Probe: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            window?.backgroundColor = UIColor(Color.appBackground)
         }
     }
 }

@@ -31,19 +31,44 @@ enum AppTab: CaseIterable {
 }
 
 struct ContentView: View {
-    @State private var selection: AppTab = .home
+    @State private var selection: AppTab = {
+        #if DEBUG
+        switch UserDefaults.standard.string(forKey: "tab") {
+        case "impact": return .impact
+        case "ranks": return .leaderboard
+        case "settings": return .settings
+        default: return .home
+        }
+        #else
+        return .home
+        #endif
+    }()
+
+    @State private var visited: Set<AppTab> = []
 
     var body: some View {
         VStack(spacing: 0) {
-            Group {
+            ZStack {
+                // Home and Impact stay alive once opened, so switching back doesn't rebuild the map or reload photos.
+                ForEach([AppTab.home, .impact], id: \.self) { tab in
+                    if visited.contains(tab) || selection == tab {
+                        Group {
+                            if tab == .home { HomeView() } else { ImpactView() }
+                        }
+                        .environment(\.isTabActive, selection == tab)
+                        .opacity(selection == tab ? 1 : 0)
+                        .allowsHitTesting(selection == tab)
+                        .accessibilityHidden(selection != tab)
+                    }
+                }
                 switch selection {
-                case .home: HomeView()
-                case .impact: ImpactView()
                 case .leaderboard: LeaderboardView()
                 case .settings: SettingsView()
+                default: EmptyView()
                 }
             }
             .frame(maxHeight: .infinity)
+            .onChange(of: selection, initial: true) { _, tab in visited.insert(tab) }
 
             HStack(spacing: 0) {
                 ForEach(AppTab.allCases, id: \.self) { tab in
@@ -68,11 +93,17 @@ struct ContentView: View {
                 }
             }
             .padding(.horizontal, 20)
+            .padding(.top, 24)
             .padding(.bottom, 4)
         }
         .background(Color.appBackground)
         .preferredColorScheme(.dark)
     }
+}
+
+extension EnvironmentValues {
+    /// False while a kept-alive tab is hidden, so it can pause polling.
+    @Entry var isTabActive = true
 }
 
 extension Color {
