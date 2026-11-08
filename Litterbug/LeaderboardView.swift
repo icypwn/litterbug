@@ -62,6 +62,7 @@ struct LeaderboardView: View {
                 VStack(spacing: 12) {
                     // Top three get their own podium; the rows continue from 4th.
                     Podium(entries: Array(entries.prefix(3)), meID: account.currentID)
+                        .modifier(PopIn(delay: 0, replayOnTab: true))
                         .padding(.top, 10)
                         .padding(.bottom, 12)
 
@@ -73,7 +74,7 @@ struct LeaderboardView: View {
                             points: entry.points,
                             isMe: entry.user.id == account.currentID
                         )
-                        .modifier(PopIn(delay: 0.05 + Double(index) * 0.07))
+                        .modifier(PopIn(delay: 0.05 + Double(min(index, 8)) * 0.07, replayOnTab: true))
                     }
                 }
                 // Slack so rows springing in past full size aren't clipped by the scroll view.

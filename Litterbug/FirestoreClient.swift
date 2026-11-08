@@ -52,6 +52,16 @@ struct FirestoreClient {
         let (_, response) = try await URLSession.shared.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
     }
+
+    func delete(_ collection: String, id: String) async throws {
+        guard var components = URLComponents(string: "\(baseURL)/\(collection)/\(id)") else { throw URLError(.badURL) }
+        components.queryItems = [URLQueryItem(name: "key", value: apiKey)]
+        guard let url = components.url else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+    }
 }
 
 struct FirestoreList: Decodable {

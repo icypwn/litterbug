@@ -42,10 +42,13 @@ struct HomeView: View {
 
     private static let pickupRadius: CLLocationDistance = 9.144 // 30 ft
 
+    private static let nearbyRadius: CLLocationDistance = 152.4 // 500 ft: farther pieces stay on the map but not in the list
+
     private var nearestPins: [(LitterPin, CLLocationDistance)] {
         guard let here = tracker.location else { return [] }
         return Array(store.pins
             .map { ($0, $0.location.distance(from: here)) }
+            .filter { $0.1 <= Self.nearbyRadius }
             .sorted { $0.1 < $1.1 }
             .prefix(20))
     }
@@ -329,6 +332,7 @@ struct HomeView: View {
             }
             .animation(.spring(response: 0.42, dampingFraction: 0.85), value: cameraPin == nil)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .modifier(PopIn(delay: 0, replayOnTab: true))
             .frame(maxHeight: .infinity)
             .padding(.top, 12)
 
@@ -336,12 +340,23 @@ struct HomeView: View {
             // gap above the tab bar (the tab bar draws on top). Net footprint is unchanged: 10 + 150 − 16.
             VStack(spacing: 10) {
                 if let cameraPin {
-                    ShutterButton { shoot(cameraPin) }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(.scale(scale: 0.5).combined(with: .opacity))
-                        // Nothing to press while the shot is being scanned.
-                        .opacity(scanning ? 0.3 : 1)
-                        .disabled(scanning)
+                    VStack(spacing: 10) {
+                        Text(cameraPin.type == "litter"
+                             ? "Get the litter in the shot, then snap it"
+                             : "Get the \(LitterType.displayName(cameraPin.type).lowercased()) in the shot, then snap it")
+                            .font(.custom("MoreSugarRegular", size: 17))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        ShutterButton { shoot(cameraPin) }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // The area runs under the tab bar; lift it so the gaps above and below look even.
+                    .offset(y: -8)
+                    .transition(.scale(scale: 0.5).combined(with: .opacity))
+                    // Nothing to press while the shot is being scanned.
+                    .opacity(scanning ? 0.3 : 1)
+                    .disabled(scanning)
                 } else {
                 let pins = nearestPins
                 if pins.isEmpty {
@@ -357,7 +372,7 @@ struct HomeView: View {
                             NearbyRow(pin: pin, distance: distance, from: tracker.location, inRange: distance <= Self.pickupRadius) {
                                 routeTo(pin)
                             }
-                            .modifier(PopIn(delay: 0.1 + Double(min(index, 2)) * 0.07))
+                            .modifier(PopIn(delay: 0.1 + Double(min(index, 2)) * 0.07, replayOnTab: true))
                             // Rows only partly in view (the next one scrolling in) are faded.
                             .scrollTransition(.interactive) { content, phase in
                                 content.opacity(phase.isIdentity ? 1 : 0.45)
@@ -622,17 +637,29 @@ struct PopIn: ViewModifier {
     let delay: Double
     /// False: appear in place with no pop (e.g. the sticker that was just slammed into Collection).
     var enabled = true
+    /// For tabs that stay alive (Social): pop in again every time the tab is switched to.
+    var replayOnTab = false
     @State private var shown = false
+    @Environment(\.isTabActive) private var isTabActive
 
     func body(content: Content) -> some View {
         content
             .scaleEffect(shown || !enabled ? 1 : 0.85)
             .opacity(shown || !enabled ? 1 : 0)
             .onAppear {
-                withAnimation(.spring(response: 0.45, dampingFraction: 0.6).delay(delay)) {
-                    shown = true
-                }
+                guard !replayOnTab || isTabActive else { return }
+                pop()
             }
+            .onChange(of: isTabActive) { _, active in
+                guard replayOnTab else { return }
+                if active { pop() } else { shown = false }
+            }
+    }
+
+    private func pop() {
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.6).delay(delay)) {
+            shown = true
+        }
     }
 }
 

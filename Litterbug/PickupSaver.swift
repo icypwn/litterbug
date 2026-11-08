@@ -21,7 +21,7 @@ enum PickupSaver {
         // Gemini checks it's really the litter the drone saw here before any points are given. Normally that
         // already happened in the scan's one look (`sighting`); PickupVerifier is only the fallback.
         var description = ""
-        let matches: Bool, seenType: String
+        var matches: Bool, seenType: String
         if let sighting {
             (matches, seenType, description) = (sighting.matches, sighting.seenType, sighting.description)
         } else {
@@ -34,6 +34,8 @@ enum PickupSaver {
         }
         // New items have no drone type to match: any litter counts, and Gemini names it.
         if isNew, matches { type = seenType }
+        // Demo pieces are fake data (no drone photo to check against): every scan of one is approved.
+        if pin.isDemo { matches = true }
         guard matches else {
             return .rejected(seenType != type && type != "litter"
                 ? "That looks like a \(LitterType.displayName(seenType).lowercased()), not a \(LitterType.displayName(type).lowercased()). Retake it?"

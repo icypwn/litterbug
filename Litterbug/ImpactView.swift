@@ -111,8 +111,9 @@ struct ImpactView: View {
                         .padding(.top, 40)
                 }
 
-                ForEach(posts) { cleanup in
+                ForEach(Array(posts.enumerated()), id: \.element.id) { index, cleanup in
                     PostCard(cleanup: cleanup, author: account.users.first { $0.id == cleanup.cleanedBy })
+                        .modifier(PopIn(delay: 0.04 * Double(min(index, 5)), replayOnTab: true))
                         // Gentle: the next post stays clearly visible below the current one.
                         .scrollTransition(topLeading: .identity, bottomTrailing: .interactive) { content, phase in
                             content

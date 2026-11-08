@@ -6,6 +6,8 @@ struct LitterPin: Identifiable, Equatable {
     let lat: Double
     let lon: Double
     let type: String
+    /// Placed by hand for demos (no drone photo behind it): any scan of it is approved.
+    var isDemo = false
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: lat, longitude: lon)

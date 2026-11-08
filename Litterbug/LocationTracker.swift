@@ -10,10 +10,11 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     var location: CLLocation?
 
     /// Demo: everyone stands in the Spiedie Fest field at Otsiningo Park (where the demo litter is),
-    /// whether or not they've shared their location. `defaults write icy.Litterbug realLocation -bool YES`
-    /// switches back to real GPS.
+    /// whether or not they've shared their location.
     static let demoSpot = CLLocation(latitude: 42.1295, longitude: -75.9025)
-    static var usesDemoSpot: Bool { !UserDefaults.standard.bool(forKey: "realLocation") }
+    /// Always on for the judges' demo, even on a phone with location allowed (an old `realLocation`
+    /// setting left on a phone is ignored).
+    static let usesDemoSpot = true
 
     private let manager = CLLocationManager()
 
@@ -39,6 +40,9 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        manager.startUpdatingLocation()
+        Task { @MainActor in
+            guard !Self.usesDemoSpot else { return }
+            self.manager.startUpdatingLocation()
+        }
     }
 }

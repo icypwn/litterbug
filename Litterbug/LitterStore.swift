@@ -1,4 +1,5 @@
 import Foundation
+import CoreLocation
 import Observation
 
 @MainActor
@@ -33,17 +34,41 @@ final class LitterStore {
 
     /// Demo reset: every placed piece (tagged with `demoType`) that has been picked up goes back on
     /// the map as it was — open, original type, no photo or cleanup info. Seeded history is untouched.
-    /// Returns how many pieces were restored.
-    func resetDemoPieces() async throws -> Int {
-        let documents = try await FirestoreClient.shared.list("litter", fields: ["demoType", "status"])
-        let picked = documents.filter { $0["demoType"] != nil && $0["status"]?.stringValue == "cleaned" }
+    /// Returns how many picked-up pieces were restored and what the piece next to you is now.
+    /// Judges' demo: each reset turns the piece next to you into the next of these, so every judge
+    /// picks up something different.
+    private static let demoCycle = ["bottle", "cup", "wrapper"]
+
+    func resetDemoPieces() async throws -> (restored: Int, next: String?) {
+        let documents = try await FirestoreClient.shared.list("litter", fields: ["demoType", "status", "lat", "lon"])
+        let demo = documents.filter { $0["demoType"] != nil }
+
+        // The demo piece right by you (within 15 m), picked up or not, moves on to the next object.
+        let here = LocationTracker.shared.location ?? LocationTracker.demoSpot
+        let close = demo
+            .compactMap { d -> (FirestoreDocument, CLLocationDistance)? in
+                guard let lat = d["lat"]?.number, let lon = d["lon"]?.number else { return nil }
+                return (d, CLLocation(latitude: lat, longitude: lon).distance(from: here))
+            }
+            .filter { $0.1 <= 15 }
+            .min { $0.1 < $1.1 }?.0
+        var next: String?
+        if let close {
+            let current = close["demoType"]?.stringValue ?? ""
+            let index = Self.demoCycle.firstIndex(of: current) ?? -1
+            next = Self.demoCycle[(index + 1) % Self.demoCycle.count]
+        }
+
+        let picked = demo.filter { $0["status"]?.stringValue == "cleaned" || $0.id == close?.id }
         try await withThrowingTaskGroup(of: Void.self) { group in
             for document in picked {
-                let type = document["demoType"]?.stringValue ?? "litter"
+                let isClose = document.id == close?.id
+                let type = isClose ? next! : document["demoType"]?.stringValue ?? "litter"
                 group.addTask {
                     try await FirestoreClient.shared.update(
                         "litter", id: document.id,
-                        fields: ["status": .string("open"), "type": .string(type)],
+                        fields: ["status": .string("open"), "type": .string(type)]
+                            .merging(isClose ? ["demoType": .string(type)] : [:]) { a, _ in a },
                         deleting: ["photo", "place", "cleanedAt", "cleanedBy", "bboxX", "bboxY", "bboxSize"]
                     )
                 }
@@ -51,7 +76,7 @@ final class LitterStore {
             try await group.waitForAll()
         }
         await reload()
-        return picked.count
+        return (picked.filter { $0["status"]?.stringValue == "cleaned" }.count, next)
     }
 
     private func fetch() async -> [LitterPin]? {
@@ -66,7 +91,7 @@ final class LitterStore {
             return offsets.map { LitterPin(id: "demo-\($0.0)", lat: center.lat + $0.1, lon: center.lon + $0.2, type: $0.0) }
         }
         #endif
-        guard let documents = try? await FirestoreClient.shared.list("litter", fields: ["lat", "lon", "type", "status", "cleanedAt", "cleanedBy"]) else { return nil }
+        guard let documents = try? await FirestoreClient.shared.list("litter", fields: ["lat", "lon", "type", "status", "cleanedAt", "cleanedBy", "demoType"]) else { return nil }
         // Streak is the signed-in account's own cleanups.
         let me = AccountStore.shared.currentID
         let mine = documents.filter { $0["status"]?.stringValue == "cleaned" && $0["cleanedBy"]?.stringValue == me }
@@ -95,6 +120,7 @@ extension LitterStore {
 private extension LitterPin {
     init?(document: FirestoreDocument) {
         guard let lat = document["lat"]?.number, let lon = document["lon"]?.number else { return nil }
-        self.init(id: document.id, lat: lat, lon: lon, type: document["type"]?.stringValue ?? "litter")
+        self.init(id: document.id, lat: lat, lon: lon, type: document["type"]?.stringValue ?? "litter",
+                  isDemo: document["demoType"] != nil)
     }
 }

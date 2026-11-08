@@ -4,8 +4,11 @@ import CoreLocation
 
 struct SettingsView: View {
     @State private var account = AccountStore.shared
-    @State private var name = ""
-    @State private var username = ""
+    // Start from the already-loaded account so the fields aren't blank (and Save doesn't flash) on open.
+    @State private var name = AccountStore.shared.current?.name ?? ""
+    @State private var username = AccountStore.shared.current?.username ?? ""
+    /// Which account the fields were filled from; until then nothing counts as an edit.
+    @State private var loadedFor = AccountStore.shared.current?.id
     @State private var isSaving = false
     @State private var status: String?
 
@@ -15,7 +18,7 @@ struct SettingsView: View {
     }
 
     private var hasChanges: Bool {
-        guard let current = account.current else { return false }
+        guard let current = account.current, loadedFor == current.id else { return false }
         return cleanName != current.name || cleanUsername != current.username
     }
 
@@ -41,6 +44,7 @@ struct SettingsView: View {
                     }
                 }
                 .foregroundStyle(.white)
+                .modifier(PopIn(delay: 0))
 
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Account")
@@ -83,17 +87,22 @@ struct SettingsView: View {
                 }
                 .animation(.spring(response: 0.38, dampingFraction: 0.75), value: hasChanges)
                 .animation(.easeInOut(duration: 0.2), value: status)
+                .modifier(PopIn(delay: 0.05))
             } else {
                 Text("Loading account…")
                     .font(.custom("MoreSugarRegular", size: 17))
                     .foregroundStyle(.white.opacity(0.7))
             }
 
+            // Sections pop in one after another, like Collection's stickers.
             FriendsSection()
+                .modifier(PopIn(delay: 0.1))
 
             PermissionsSection()
+                .modifier(PopIn(delay: 0.15))
 
             ResetSection()
+                .modifier(PopIn(delay: 0.2))
         }
         .padding(.horizontal, 30)
         .padding(.bottom, 40)
@@ -102,8 +111,9 @@ struct SettingsView: View {
         .scrollBounceBehavior(.basedOnSize)
         .background(Color.appBackground)
         .task {
+            if !hasChanges { loadFields() }
             await account.refresh()
-            loadFields()
+            if !hasChanges { loadFields() }
         }
         .onChange(of: account.current) { _, _ in
             if !hasChanges { loadFields() }
@@ -114,6 +124,7 @@ struct SettingsView: View {
         guard let current = account.current else { return }
         name = current.name
         username = current.username
+        loadedFor = current.id
     }
 
     private func save() async {
@@ -347,8 +358,12 @@ struct ResetSection: View {
         isResetting = true
         status = nil
         do {
-            let restored = try await LitterStore.shared.resetDemoPieces()
-            status = restored == 0 ? "Nothing to reset" : "Restored \(restored) \(restored == 1 ? "piece" : "pieces")"
+            let (restored, next) = try await LitterStore.shared.resetDemoPieces()
+            if let next {
+                status = "Next up: \(LitterType.displayName(next).lowercased())"
+            } else {
+                status = restored == 0 ? "Nothing to reset" : "Restored \(restored) \(restored == 1 ? "piece" : "pieces")"
+            }
         } catch {
             status = "Couldn't reset, try again"
         }
