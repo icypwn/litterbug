@@ -6,8 +6,6 @@ struct LitterPin: Identifiable, Equatable {
     let lat: Double
     let lon: Double
     let type: String
-    /// Reward for picking it up, set by the drone from Gemini's 1-10 score (score x 10).
-    var points: Int = LitterType.defaultPoints
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: lat, longitude: lon)
@@ -17,6 +15,18 @@ struct LitterPin: Identifiable, Equatable {
         CLLocation(latitude: lat, longitude: lon)
     }
 
+    /// Id prefix for a stand-in pin made by the + button (litter that isn't on the map yet).
+    static let newPrefix = "new-"
+
+    /// A stand-in for unlogged litter at your feet; CaptureFlow saves it as a new doc.
+    static func unlogged(at location: CLLocation) -> LitterPin {
+        LitterPin(id: newPrefix + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(20),
+                  lat: location.coordinate.latitude, lon: location.coordinate.longitude, type: "litter")
+    }
+
+    /// Reward for picking it up: fixed per category.
+    var points: Int { LitterType.points(type) }
+
     var symbol: String {
         LitterType.all.contains(type) ? "litter-\(type)" : "litter-litter"
     }
@@ -24,8 +34,16 @@ struct LitterPin: Identifiable, Equatable {
 
 enum LitterType {
     static let all = ["bottle", "can", "bag", "wrapper", "cup", "litter"]
-    /// Points for litter the drone didn't score (older pins, manual ones).
-    static let defaultPoints = 10
+    /// Fixed points per category, by how much good removing it does.
+    /// Keep in sync with POINTS in the drone's classify.py.
+    static func points(_ type: String) -> Int {
+        switch type {
+        case "bag", "bottle": 80
+        case "can", "cup": 60
+        case "wrapper": 50
+        default: 30
+        }
+    }
 
     static func displayName(_ type: String) -> String {
         switch type {

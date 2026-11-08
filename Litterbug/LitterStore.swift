@@ -66,7 +66,7 @@ final class LitterStore {
             return offsets.map { LitterPin(id: "demo-\($0.0)", lat: center.lat + $0.1, lon: center.lon + $0.2, type: $0.0) }
         }
         #endif
-        guard let documents = try? await FirestoreClient.shared.list("litter", fields: ["lat", "lon", "type", "points", "status", "cleanedAt", "cleanedBy"]) else { return nil }
+        guard let documents = try? await FirestoreClient.shared.list("litter", fields: ["lat", "lon", "type", "status", "cleanedAt", "cleanedBy"]) else { return nil }
         // Streak is the signed-in account's own cleanups.
         let me = AccountStore.shared.currentID
         let mine = documents.filter { $0["status"]?.stringValue == "cleaned" && $0["cleanedBy"]?.stringValue == me }
@@ -95,7 +95,6 @@ extension LitterStore {
 private extension LitterPin {
     init?(document: FirestoreDocument) {
         guard let lat = document["lat"]?.number, let lon = document["lon"]?.number else { return nil }
-        self.init(id: document.id, lat: lat, lon: lon, type: document["type"]?.stringValue ?? "litter",
-                  points: document["points"]?.number.map(Int.init) ?? LitterType.defaultPoints)
+        self.init(id: document.id, lat: lat, lon: lon, type: document["type"]?.stringValue ?? "litter")
     }
 }

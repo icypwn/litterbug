@@ -1,3 +1,4 @@
+import Combine
 import AVFoundation
 import SwiftUI
 @_spi(Restricted) import MapboxMaps
@@ -29,6 +30,15 @@ struct HomeView: View {
     @State private var camera = Camera()
     @State private var capturedPhoto: UIImage?
     @State private var capturedSelfie: UIImage?
+    /// The inline scan after the shutter (Tallo-style): frozen shot + scan line, then the cutout lifts out.
+    @State private var scanPhoto: UIImage?
+    /// True from the instant the shutter is tapped: freezes the preview and shows the scan right away,
+    /// before the full-res photo (scanPhoto) has even come back.
+    @State private var scanning = false
+    @State private var scanCutout: UIImage?
+    @State private var scanStatus = ""
+    @State private var preparedScan: PickupScan.Result?
+
 
     private static let pickupRadius: CLLocationDistance = 9.144 // 30 ft
 
@@ -65,12 +75,44 @@ struct HomeView: View {
             captureTarget = pin
             return
         }
+        // Freeze + scan line now; the photo itself lands a few tenths of a second later.
+        scanCutout = nil
+        scanStatus = "Finding the litter…"
+        scanning = true
         Task {
-            guard let image = await camera.capture() else { return }
-            let selfie = await camera.captureSelfie()
+            guard let image = await camera.capture() else {
+                scanning = false
+                return
+            }
+            // Scan in the camera card: the frozen shot and a sweeping line while Gemini + SAM work.
+            scanPhoto = image
+            let result = await PickupScan.run(image, expectedType: pin.type, location: tracker.location ?? pin.location) { scanStatus = $0 }
+            guard let result else {
+                scanPhoto = nil
+                scanning = false
+                scanStatus = ""
+                return
+            }
+            if let cutout = result.cutout {
+                scanStatus = "Got it!"
+                scanCutout = cutout
+                try? await Task.sleep(for: .seconds(1.1)) // let the lift-out land before moving on
+            }
+            // + button: no review — straight to Collection, where the sticker gets stuck on.
+            if pin.id.hasPrefix(LitterPin.newPrefix) {
+                PickupSaver.dropIntoCollection(pin: pin, scan: result, photo: image, location: tracker.location)
+                cameraPin = nil
+                scanPhoto = nil
+                scanning = false
+                scanCutout = nil
+                return
+            }
             capturedPhoto = image
-            capturedSelfie = selfie
+            preparedScan = result
             cameraPin = nil
+            scanPhoto = nil
+            scanning = false
+            scanCutout = nil
             captureTarget = pin
         }
     }
@@ -95,6 +137,14 @@ struct HomeView: View {
             )
         }
     }
+
+    /// The map's own idea of where you are (it drives the follow-me camera): the demo spot, or real GPS.
+    private static let locationModel: LocationDataModel = {
+        if LocationTracker.usesDemoSpot {
+            return LocationDataModel(location: Just([Location(clLocation: LocationTracker.demoSpot)]).eraseToAnyPublisher())
+        }
+        return LocationDataModel(location: AppleLocationProvider().onLocationUpdate.eraseToAnyPublisher())
+    }()
 
     private static let doodleStyle: MapStyle = {
         guard let url = Bundle.main.url(forResource: "DoodleStyle", withExtension: "json"),
@@ -170,6 +220,7 @@ struct HomeView: View {
 
             ZStack {
             Map(viewport: $viewport) { mapContent }
+            .locationDataModel(Self.locationModel)
             .mapStyle(mapStyle)
             .onMapLoaded { _ in mapLoaded = true }
             .ornamentOptions(Self.ornaments)
@@ -183,6 +234,14 @@ struct HomeView: View {
                         }
                         .transition(.scale.combined(with: .opacity))
                     }
+                    // Log litter that isn't on the map: same camera, no review step.
+                    MapCircleButton(image: "add") {
+                        guard let here = tracker.location else { return }
+                        route = []
+                        routePinID = nil
+                        cameraPin = .unlogged(at: here)
+                    }
+                    .accessibilityLabel("Log litter that isn't on the map")
                     MapCircleButton(image: "refresh", rotation: Double(refreshSpins) * 360) {
                         guard !isRefreshing else { return }
                         isRefreshing = true
@@ -213,14 +272,18 @@ struct HomeView: View {
                     }
                 }
                 .padding(.bottom, 14)
-                .transition(.scale(scale: 0.6).combined(with: .opacity))
+                .transition(.asymmetric(
+                    insertion: .scale(scale: 0.7, anchor: .bottom).combined(with: .opacity),
+                    removal: .scale(scale: 0.9, anchor: .bottom).combined(with: .opacity)
+                ))
             }
-            .animation(.spring(response: 0.35, dampingFraction: 0.65), value: pickupPin?.id)
+            .animation(.spring(response: 0.42, dampingFraction: 0.58), value: pickupPin?.id)
+            .animation(.spring(response: 0.42, dampingFraction: 0.58), value: cameraPin == nil)
             if cameraPin != nil {
                 ZStack {
                     Color.black
                     if Camera.isAvailable {
-                        CameraPreview(session: camera.session)
+                        CameraPreview(session: camera.session, frozen: scanning)
                     } else {
                         VStack(spacing: 8) {
                             Image("camera")
@@ -233,7 +296,14 @@ struct HomeView: View {
                         .foregroundStyle(.white.opacity(0.6))
                     }
                 }
+                .overlay {
+                    if scanning {
+                        LitterScanOverlay(photo: scanPhoto, cutout: scanCutout, status: scanStatus)
+                            .transition(.opacity)
+                    }
+                }
                 .overlay(alignment: .topTrailing) {
+                    if !scanning {
                     Button {
                         cameraPin = nil
                     } label: {
@@ -245,6 +315,7 @@ struct HomeView: View {
                     }
                     .buttonStyle(.plain)
                     .padding(12)
+                    }
                 }
                 .task {
                     if Camera.isAvailable, await AVCaptureDevice.requestAccess(for: .video) {
@@ -252,8 +323,11 @@ struct HomeView: View {
                     }
                 }
                 .onDisappear { camera.stop() }
+                // Eases in over the map rather than snapping (the outer animation keys on cameraPin).
+                .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
             }
+            .animation(.spring(response: 0.42, dampingFraction: 0.85), value: cameraPin == nil)
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .frame(maxHeight: .infinity)
             .padding(.top, 12)
@@ -264,6 +338,10 @@ struct HomeView: View {
                 if let cameraPin {
                     ShutterButton { shoot(cameraPin) }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.scale(scale: 0.5).combined(with: .opacity))
+                        // Nothing to press while the shot is being scanned.
+                        .opacity(scanning ? 0.3 : 1)
+                        .disabled(scanning)
                 } else {
                 let pins = nearestPins
                 if pins.isEmpty {
@@ -308,6 +386,7 @@ struct HomeView: View {
                 }
                 }
             }
+            .animation(.spring(response: 0.42, dampingFraction: 0.58), value: cameraPin == nil)
             .frame(height: 150, alignment: .top)
             .padding(.top, 10)
             .padding(.bottom, -16)
@@ -337,8 +416,8 @@ struct HomeView: View {
                 routePinID = nil
             }
         }
-        .fullScreenCover(item: $captureTarget, onDismiss: { capturedPhoto = nil; capturedSelfie = nil }) { pin in
-            CaptureFlow(pin: pin, location: tracker.location, photo: capturedPhoto, selfie: capturedSelfie)
+        .fullScreenCover(item: $captureTarget, onDismiss: { capturedPhoto = nil; capturedSelfie = nil; preparedScan = nil }) { pin in
+            CaptureFlow(pin: pin, location: tracker.location, photo: capturedPhoto, selfie: capturedSelfie, prepared: preparedScan)
         }
     }
 }
@@ -541,12 +620,14 @@ struct WobblyCircle: Shape {
 
 struct PopIn: ViewModifier {
     let delay: Double
+    /// False: appear in place with no pop (e.g. the sticker that was just slammed into Collection).
+    var enabled = true
     @State private var shown = false
 
     func body(content: Content) -> some View {
         content
-            .scaleEffect(shown ? 1 : 0.85)
-            .opacity(shown ? 1 : 0)
+            .scaleEffect(shown || !enabled ? 1 : 0.85)
+            .opacity(shown || !enabled ? 1 : 0)
             .onAppear {
                 withAnimation(.spring(response: 0.45, dampingFraction: 0.6).delay(delay)) {
                     shown = true

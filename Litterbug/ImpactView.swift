@@ -12,6 +12,7 @@ struct Cleanup: Identifiable, Equatable {
     var selfie: UIImage? = nil
     var cleanedBy: String? = nil
     var location: CLLocation? = nil
+    var points: Int = 0
 
     static func == (lhs: Cleanup, rhs: Cleanup) -> Bool {
         lhs.id == rhs.id && lhs.cleanedAt == rhs.cleanedAt && lhs.type == rhs.type
@@ -32,7 +33,7 @@ final class ImpactStore {
     }
 
     private func refresh() async {
-        guard let documents = try? await FirestoreClient.shared.list("litter", fields: ["type", "place", "photo", "selfie", "status", "cleanedAt", "cleanedBy", "lat", "lon"]) else { return }
+        guard let documents = try? await FirestoreClient.shared.list("litter", fields: ["type", "place", "photo", "selfie", "status", "cleanedAt", "cleanedBy", "lat", "lon", "pointsAwarded"]) else { return }
         let latest = documents
             .filter { $0["status"]?.stringValue == "cleaned" }
             .map { document in
@@ -46,7 +47,9 @@ final class ImpactStore {
                     cleanedBy: document["cleanedBy"]?.stringValue,
                     location: document["lat"]?.number.flatMap { lat in
                         document["lon"]?.number.map { CLLocation(latitude: lat, longitude: $0) }
-                    }
+                    },
+                    // Older cleanups have no pointsAwarded: score them by type like new ones.
+                    points: document["pointsAwarded"]?.number.map(Int.init) ?? LitterType.points(document["type"]?.stringValue ?? "litter")
                 )
             }
             .sorted { $0.cleanedAt > $1.cleanedAt }
@@ -58,6 +61,8 @@ final class ImpactStore {
 
 /// The Social tab (was Impact): your profile up top, then everyone's pickups as a scrolling feed.
 struct ImpactView: View {
+    /// Inside Social, which shows its own title above the Feed / Ranks switch.
+    var embedded = false
     @State private var store = ImpactStore()
     @State private var account = AccountStore.shared
     @State private var litter = LitterStore.shared
@@ -91,9 +96,11 @@ struct ImpactView: View {
         ScrollView {
             VStack(spacing: 18) {
                 VStack(alignment: .leading, spacing: 4) {
-                    PageTitle("Social")
-                    FeedPicker(selection: $feed)
-                        .padding(.top, 10)
+                    if !embedded {
+                        PageTitle("Social")
+                        FeedPicker(selection: $feed)
+                            .padding(.top, 10)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -185,15 +192,26 @@ struct ProfileHeader: View {
 /// Local | Friends switch: two capsules in the row style, the selected one filled white.
 struct FeedPicker: View {
     @Binding var selection: ImpactView.Feed
+
+    var body: some View {
+        PillPicker(selection: $selection, options: ImpactView.Feed.allCases.map { ($0, $0.rawValue) })
+    }
+}
+
+/// Two (or more) options in a white-outlined capsule; the selected one is filled white and slides over.
+/// Social's Feed / Ranks, Collection's Mine / Friends.
+struct PillPicker<Value: Hashable>: View {
+    @Binding var selection: Value
+    let options: [(Value, String)]
     @Namespace private var pill
 
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(ImpactView.Feed.allCases, id: \.self) { feed in
+            ForEach(options, id: \.0) { feed, title in
                 Button {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { selection = feed }
                 } label: {
-                    Text(feed.rawValue)
+                    Text(title)
                         .font(.custom("MoreSugarRegular", size: 17))
                         .foregroundStyle(selection == feed ? Color.appBackground : .white)
                         .frame(maxWidth: .infinity)
@@ -311,7 +329,7 @@ struct PostCard: View {
                 Text("Picked up a \(LitterType.displayName(cleanup.type).lowercased())")
                     .font(.custom("MoreSugarRegular", size: 17))
                 Spacer()
-                Text("+\(LeaderboardView.pointsPerPiece) pts")
+                Text("+\(cleanup.points) pts")
                     .font(.custom("MoreSugarRegular", size: 14))
                     .opacity(0.6)
             }

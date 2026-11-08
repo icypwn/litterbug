@@ -17,16 +17,26 @@ struct FirestoreClient {
     }
 
     func list(_ collection: String, fields: [String]) async throws -> [FirestoreDocument] {
-        guard var components = URLComponents(string: "\(baseURL)/\(collection)") else { throw URLError(.badURL) }
-        components.queryItems = [
-            URLQueryItem(name: "pageSize", value: "300"),
-            URLQueryItem(name: "key", value: apiKey),
-        ] + fields.map { URLQueryItem(name: "mask.fieldPaths", value: $0) }
-        guard let url = components.url else { throw URLError(.badURL) }
-        let (data, response) = try await URLSession.shared.data(from: url)
-        // Error bodies (e.g. 429 quota) decode as an empty list, so reject them instead of wiping the map.
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-        return try JSONDecoder().decode(FirestoreList.self, from: data).documents ?? []
+        // Firestore caps each response by size, not just pageSize: with photos and cutouts in the mask it
+        // hands back a partial page plus a nextPageToken. Follow it, or docs silently go missing.
+        var all: [FirestoreDocument] = []
+        var pageToken: String?
+        repeat {
+            guard var components = URLComponents(string: "\(baseURL)/\(collection)") else { throw URLError(.badURL) }
+            components.queryItems = [
+                URLQueryItem(name: "pageSize", value: "300"),
+                URLQueryItem(name: "key", value: apiKey),
+            ] + fields.map { URLQueryItem(name: "mask.fieldPaths", value: $0) }
+                + (pageToken.map { [URLQueryItem(name: "pageToken", value: $0)] } ?? [])
+            guard let url = components.url else { throw URLError(.badURL) }
+            let (data, response) = try await URLSession.shared.data(from: url)
+            // Error bodies (e.g. 429 quota) decode as an empty list, so reject them instead of wiping the map.
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+            let page = try JSONDecoder().decode(FirestoreList.self, from: data)
+            all += page.documents ?? []
+            pageToken = page.nextPageToken
+        } while pageToken != nil
+        return all
     }
 
     /// Sets `fields`; any name in `deleting` is removed from the doc (it's in the update mask but not the body).
@@ -46,6 +56,7 @@ struct FirestoreClient {
 
 struct FirestoreList: Decodable {
     let documents: [FirestoreDocument]?
+    let nextPageToken: String?
 }
 
 struct FirestoreDocument: Decodable {

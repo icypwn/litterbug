@@ -1,13 +1,14 @@
 import SwiftUI
 
 enum AppTab: CaseIterable {
-    case home, impact, leaderboard, settings
+    // Tab bar order: Home · Collection · Social · Settings (raw names kept: leaderboard = Collection, impact = Social).
+    case home, leaderboard, impact, settings
 
     var icon: String {
         switch self {
         case .home: "tab-home"
         case .impact: "tab-impact"
-        case .leaderboard: "tab-leaderboard"
+        case .leaderboard: "tab-collection"
         case .settings: "tab-settings"
         }
     }
@@ -16,7 +17,7 @@ enum AppTab: CaseIterable {
         switch self {
         case .home: "Home"
         case .impact: "Social"
-        case .leaderboard: "Ranks"
+        case .leaderboard: "Collection"
         case .settings: "Settings"
         }
     }
@@ -53,7 +54,7 @@ struct ContentView: View {
                 ForEach([AppTab.home, .impact], id: \.self) { tab in
                     if visited.contains(tab) || selection == tab {
                         Group {
-                            if tab == .home { HomeView() } else { ImpactView() }
+                            if tab == .home { HomeView() } else { SocialView() }
                         }
                         .environment(\.isTabActive, selection == tab)
                         .opacity(selection == tab ? 1 : 0)
@@ -62,7 +63,7 @@ struct ContentView: View {
                     }
                 }
                 switch selection {
-                case .leaderboard: LeaderboardView()
+                case .leaderboard: CollectionView()
                 case .settings: SettingsView()
                 default: EmptyView()
                 }
@@ -98,6 +99,11 @@ struct ContentView: View {
         }
         .background(Color.appBackground)
         .preferredColorScheme(.dark)
+        .onChange(of: AppRouter.shared.requestedTab) { _, tab in
+            guard let tab else { return }
+            selection = tab
+            AppRouter.shared.requestedTab = nil
+        }
     }
 }
 

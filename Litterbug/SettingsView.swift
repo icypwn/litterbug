@@ -53,28 +53,36 @@ struct SettingsView: View {
                     SettingsField(label: "Username", text: $username, prefix: "@")
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                }
 
-                Button {
-                    Task { await save() }
-                } label: {
-                    Text(isSaving ? "Saving…" : "Save changes")
-                        .font(.custom("MoreSugarRegular", size: 20))
-                        .foregroundStyle(Color.appBackground)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(.white, in: Capsule())
-                }
-                .buttonStyle(.plain)
-                .disabled(!hasChanges || cleanName.isEmpty || cleanUsername.isEmpty || isSaving)
-                .opacity(hasChanges ? 1 : 0.4)
+                    // Only once something's been edited (or while it saves), tucked right under the fields.
+                    if hasChanges || isSaving {
+                        Button {
+                            Task { await save() }
+                        } label: {
+                            Text(isSaving ? "Saving…" : "Save changes")
+                                .font(.custom("MoreSugarRegular", size: 20))
+                                .foregroundStyle(Color.appBackground)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(.white, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(cleanName.isEmpty || cleanUsername.isEmpty || isSaving)
+                        .opacity(cleanName.isEmpty || cleanUsername.isEmpty ? 0.4 : 1)
+                        .padding(.top, 4)
+                        .transition(.scale(scale: 0.9, anchor: .top).combined(with: .opacity))
+                    }
 
-                if let status {
-                    Text(status)
-                        .font(.custom("MoreSugarRegular", size: 15))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .frame(maxWidth: .infinity)
+                    if let status {
+                        Text(status)
+                            .font(.custom("MoreSugarRegular", size: 15))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .frame(maxWidth: .infinity)
+                            .transition(.opacity)
+                    }
                 }
+                .animation(.spring(response: 0.38, dampingFraction: 0.75), value: hasChanges)
+                .animation(.easeInOut(duration: 0.2), value: status)
             } else {
                 Text("Loading account…")
                     .font(.custom("MoreSugarRegular", size: 17))
@@ -171,20 +179,25 @@ struct FriendsSection: View {
                 .frame(height: 50)
                 .overlay(Capsule().stroke(.white, lineWidth: 2))
 
-                Button {
-                    Task { await add() }
-                } label: {
-                    Text(isAdding ? "…" : "Add")
-                        .font(.custom("MoreSugarRegular", size: 18))
-                        .foregroundStyle(Color.appBackground)
-                        .padding(.horizontal, 22)
-                        .frame(height: 50)
-                        .background(.white, in: Capsule())
+                // Only once there's a username to add; the field has the full width until then.
+                if !username.trimmingCharacters(in: .whitespaces).isEmpty || isAdding {
+                    Button {
+                        Task { await add() }
+                    } label: {
+                        Text(isAdding ? "…" : "Add")
+                            .font(.custom("MoreSugarRegular", size: 18))
+                            .foregroundStyle(Color.appBackground)
+                            .padding(.horizontal, 22)
+                            .frame(height: 50)
+                            .background(.white, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isAdding)
+                    .transition(.scale(scale: 0.7, anchor: .trailing).combined(with: .opacity))
                 }
-                .buttonStyle(.plain)
-                .disabled(username.trimmingCharacters(in: .whitespaces).isEmpty || isAdding)
-                .opacity(username.trimmingCharacters(in: .whitespaces).isEmpty ? 0.4 : 1)
             }
+            .animation(.spring(response: 0.38, dampingFraction: 0.75),
+                       value: username.trimmingCharacters(in: .whitespaces).isEmpty)
 
             if let status {
                 Text(status)

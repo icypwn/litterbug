@@ -1,28 +1,32 @@
 import SwiftUI
 import Observation
 
-/// Pieces cleaned per user, from `cleanedBy` on cleaned litter docs.
+/// Pieces cleaned and points earned per user, from `cleanedBy` / `pointsAwarded` on cleaned litter docs.
 @MainActor
 @Observable
 final class RankStore {
     var pieces: [String: Int] = [:]
+    var points: [String: Int] = [:]
 
     func refresh() async {
-        guard let documents = try? await FirestoreClient.shared.list("litter", fields: ["status", "cleanedBy"]) else { return }
+        guard let documents = try? await FirestoreClient.shared.list("litter", fields: ["status", "cleanedBy", "pointsAwarded", "type"]) else { return }
         var counts: [String: Int] = [:]
+        var totals: [String: Int] = [:]
         for document in documents where document["status"]?.stringValue == "cleaned" {
             if let user = document["cleanedBy"]?.stringValue {
                 counts[user, default: 0] += 1
+                totals[user, default: 0] += document["pointsAwarded"]?.number.map(Int.init)
+                    ?? LitterType.points(document["type"]?.stringValue ?? "litter")   // older cleanups: by type
             }
         }
-        if counts != pieces {
-            pieces = counts
-        }
+        if counts != pieces { pieces = counts }
+        if totals != points { points = totals }
     }
 }
 
 struct LeaderboardView: View {
-    static let pointsPerPiece = 10
+    /// Inside Social, which shows its own title above the Feed / Ranks switch.
+    var embedded = false
 
     @State private var ranks = RankStore()
     @State private var account = AccountStore.shared
@@ -38,17 +42,20 @@ struct LeaderboardView: View {
         }
     }
 
-    private var entries: [(user: UserProfile, pieces: Int)] {
+    /// Ranked by points (bigger, more harmful litter is worth more), then pieces, then name.
+    private var entries: [(user: UserProfile, pieces: Int, points: Int)] {
         people
-            .map { ($0, ranks.pieces[$0.id] ?? 0) }
-            .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.name < $1.0.name }
+            .map { ($0, ranks.pieces[$0.id] ?? 0, ranks.points[$0.id] ?? 0) }
+            .sorted { $0.2 != $1.2 ? $0.2 > $1.2 : $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.name < $1.0.name }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 14) {
-                PageTitle("Ranks")
-                FeedPicker(selection: $scope)
+                if !embedded {
+                    PageTitle("Ranks")
+                    FeedPicker(selection: $scope)
+                }
             }
 
             ScrollView {
@@ -63,7 +70,7 @@ struct LeaderboardView: View {
                             rank: index + 4,
                             user: entry.user,
                             pieces: entry.pieces,
-                            points: entry.pieces * Self.pointsPerPiece,
+                            points: entry.points,
                             isMe: entry.user.id == account.currentID
                         )
                         .modifier(PopIn(delay: 0.05 + Double(index) * 0.07))
@@ -131,7 +138,7 @@ struct RankRow: View {
 
 /// 2nd · 1st · 3rd: big avatars ringed in silver, gold and bronze, 1st larger and raised.
 struct Podium: View {
-    let entries: [(user: UserProfile, pieces: Int)]
+    let entries: [(user: UserProfile, pieces: Int, points: Int)]
     let meID: String
 
     var body: some View {
@@ -148,7 +155,7 @@ struct Podium: View {
         .foregroundStyle(.white)
     }
 
-    private func slot(rank: Int, entry: (user: UserProfile, pieces: Int)) -> some View {
+    private func slot(rank: Int, entry: (user: UserProfile, pieces: Int, points: Int)) -> some View {
         let first = rank == 1
         let size: CGFloat = first ? 92 : 70
         return VStack(spacing: 6) {
@@ -163,7 +170,7 @@ struct Podium: View {
                 .font(.custom("MoreSugarRegular", size: first ? 19 : 16))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-            Text("\(entry.pieces * LeaderboardView.pointsPerPiece) pts")
+            Text("\(entry.points) pts")
                 .font(.custom("CheeseMilky", size: first ? 24 : 20))
                 .contentTransition(.numericText())
             Text("\(entry.pieces) \(entry.pieces == 1 ? "piece" : "pieces")")

@@ -3,7 +3,8 @@ import UIKit
 /// Checks a pickup photo with Gemini (same model the drone uses to classify litter):
 /// is there litter in it, and is it the kind the drone said was here?
 enum PickupVerifier {
-    static let model = "gemini-3.7-flash"
+    // Flash-Lite: ~1 s vs ~4.5–7.7 s. Only the fallback now — the scan's LitterLocator.look normally answers this.
+    static let model = "gemini-3.5-flash-lite"
 
     struct Verdict: Decodable {
         /// True when the photo shows litter of the expected type (any litter, if the pin is plain "litter").
@@ -40,6 +41,7 @@ enum PickupVerifier {
             ]]],
             "generationConfig": [
                 "temperature": 0,
+                "thinkingConfig": ["thinkingLevel": "low"],
                 "responseMimeType": "application/json",
                 "responseSchema": [
                     "type": "object",

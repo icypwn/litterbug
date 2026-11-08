@@ -83,6 +83,8 @@ nonisolated final class Camera: NSObject, AVCapturePhotoCaptureDelegate, @unchec
 
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
+    /// While true the preview holds its last frame (the shutter freeze), the session keeps running.
+    var frozen = false
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
@@ -91,7 +93,11 @@ struct CameraPreview: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: PreviewView, context: Context) {}
+    func updateUIView(_ uiView: PreviewView, context: Context) {
+        // Disabling the layer's connection stops it drawing new frames, so it shows the exact frame that
+        // was up when the shutter was tapped — instantly, without waiting for the full-res photo.
+        uiView.previewLayer.connection?.isEnabled = !frozen
+    }
 
     final class PreviewView: UIView {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }

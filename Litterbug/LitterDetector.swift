@@ -5,6 +5,9 @@ struct LitterDetection {
     let crop: UIImage
     let annotated: UIImage
     let box: CGRect
+    /// Tight salient-object box, [x, y, w, h] fractions of the upright photo, top-left origin.
+    /// SAM's fallback prompt when Gemini can't give one.
+    var objectBox: [Double] = []
     let suggestedType: String?
 }
 
@@ -44,6 +47,7 @@ enum LitterDetector {
             crop: crop,
             annotated: annotated(upright, box: square),
             box: CGRect(x: square.minX / width, y: square.minY / height, width: square.width / width, height: square.height / height),
+            objectBox: [Double(objectBox.minX), Double(1 - objectBox.maxY), Double(objectBox.width), Double(objectBox.height)],
             suggestedType: crop.cgImage.flatMap(classify)
         )
     }
