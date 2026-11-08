@@ -4,3 +4,4 @@ xcuserdata/
 DerivedData/
 build/
 Litterbug/Secrets.swift
+Litterbug/GoogleService-Info.plist
