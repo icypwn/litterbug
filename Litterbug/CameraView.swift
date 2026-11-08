@@ -43,6 +43,35 @@ nonisolated final class Camera: NSObject, AVCapturePhotoCaptureDelegate, @unchec
         }
     }
 
+    /// BeReal-style second shot: flip the session to the front camera, take a photo, flip back.
+    func captureSelfie() async -> UIImage? {
+        let swapped: Bool = await withCheckedContinuation { continuation in
+            queue.async { [self] in continuation.resume(returning: useCamera(.front)) }
+        }
+        guard swapped else { return nil }
+        try? await Task.sleep(for: .milliseconds(400)) // let exposure and focus settle
+        let image = await capture()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            queue.async { [self] in
+                _ = useCamera(.back)
+                continuation.resume()
+            }
+        }
+        return image
+    }
+
+    /// Call on `queue`.
+    private func useCamera(_ position: AVCaptureDevice.Position) -> Bool {
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position),
+              let input = try? AVCaptureDeviceInput(device: device) else { return false }
+        session.beginConfiguration()
+        session.inputs.forEach { session.removeInput($0) }
+        let added = session.canAddInput(input)
+        if added { session.addInput(input) }
+        session.commitConfiguration()
+        return added
+    }
+
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         let image = photo.fileDataRepresentation().flatMap(UIImage.init(data:))
         queue.async { [self] in

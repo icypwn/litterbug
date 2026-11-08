@@ -81,6 +81,8 @@ struct SettingsView: View {
                     .foregroundStyle(.white.opacity(0.7))
             }
 
+            FriendsSection()
+
             PermissionsSection()
 
             ResetSection()
@@ -117,6 +119,94 @@ struct SettingsView: View {
             status = "Couldn't save, try again"
         }
         isSaving = false
+    }
+}
+
+/// Your friends (they show in the Friends feed and Friends ranks) and adding one by username.
+struct FriendsSection: View {
+    @State private var account = AccountStore.shared
+    @State private var username = ""
+    @State private var isAdding = false
+    @State private var status: String?
+
+    private var friends: [UserProfile] {
+        let ids = account.current?.friends ?? []
+        return ids.compactMap { id in account.users.first { $0.id == id } }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Friends")
+                .font(.custom("MoreSugarRegular", size: 14))
+                .tracking(2)
+                .textCase(.uppercase)
+                .foregroundStyle(.white.opacity(0.6))
+
+            ForEach(friends) { friend in
+                HStack(spacing: 12) {
+                    AvatarView(name: friend.name, size: 34)
+                    Text(friend.name)
+                        .font(.custom("MoreSugarRegular", size: 18))
+                    Text("@\(friend.username)")
+                        .font(.custom("MoreSugarRegular", size: 14))
+                        .opacity(0.6)
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 4)
+            }
+
+            HStack(spacing: 10) {
+                HStack(spacing: 0) {
+                    Text("@").opacity(0.6)
+                    TextField("username", text: $username)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.done)
+                        .onSubmit { Task { await add() } }
+                }
+                .font(.custom("MoreSugarRegular", size: 18))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 20)
+                .frame(height: 50)
+                .overlay(Capsule().stroke(.white, lineWidth: 2))
+
+                Button {
+                    Task { await add() }
+                } label: {
+                    Text(isAdding ? "…" : "Add")
+                        .font(.custom("MoreSugarRegular", size: 18))
+                        .foregroundStyle(Color.appBackground)
+                        .padding(.horizontal, 22)
+                        .frame(height: 50)
+                        .background(.white, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(username.trimmingCharacters(in: .whitespaces).isEmpty || isAdding)
+                .opacity(username.trimmingCharacters(in: .whitespaces).isEmpty ? 0.4 : 1)
+            }
+
+            if let status {
+                Text(status)
+                    .font(.custom("MoreSugarRegular", size: 15))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .padding(.horizontal, 4)
+            }
+        }
+    }
+
+    private func add() async {
+        guard !username.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        isAdding = true
+        status = nil
+        do {
+            let name = try await account.addFriend(username: username)
+            status = "Added \(name)"
+            username = ""
+        } catch {
+            status = (error as? LocalizedError)?.errorDescription ?? "Couldn't add, try again"
+        }
+        isAdding = false
     }
 }
 

@@ -15,7 +15,7 @@ enum AppTab: CaseIterable {
     var title: String {
         switch self {
         case .home: "Home"
-        case .impact: "Impact"
+        case .impact: "Social"
         case .leaderboard: "Ranks"
         case .settings: "Settings"
         }

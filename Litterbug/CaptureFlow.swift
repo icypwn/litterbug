@@ -12,9 +12,13 @@ struct CaptureFlow: View {
     @State private var isSaving = false
     @State private var failed = false
 
-    init(pin: LitterPin, location: CLLocation?, photo: UIImage? = nil) {
+    /// Front-camera shot taken right after the photo; shown inset on the Social post.
+    let selfie: UIImage?
+
+    init(pin: LitterPin, location: CLLocation?, photo: UIImage? = nil, selfie: UIImage? = nil) {
         self.pin = pin
         self.location = location
+        self.selfie = selfie
         _type = State(initialValue: pin.type)
         _photo = State(initialValue: photo)
     }
@@ -139,12 +143,17 @@ struct CaptureFlow: View {
                 "bboxSize": .double(detection.box.width),
                 "cleanedAt": .timestamp(.now),
                 "cleanedBy": .string(AccountStore.shared.currentID),
-            ])
+            ].merging(selfieField) { $1 })
             dismiss()
         } catch {
             failed = true
         }
         isSaving = false
+    }
+
+    private var selfieField: [String: FirestoreValue] {
+        guard let selfie, let jpeg = selfie.downscaled(maxSide: 360).jpegData(compressionQuality: 0.6) else { return [:] }
+        return ["selfie": .bytes(jpeg)]
     }
 
     private func placeName(for location: CLLocation) async -> String {
@@ -190,5 +199,14 @@ struct ImagePicker: UIViewControllerRepresentable {
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
             onCancel()
         }
+    }
+}
+
+extension UIImage {
+    func downscaled(maxSide: CGFloat) -> UIImage {
+        let scale = min(1, maxSide / max(size.width, size.height))
+        guard scale < 1 else { return self }
+        let target = CGSize(width: size.width * scale, height: size.height * scale)
+        return UIGraphicsImageRenderer(size: target).image { _ in draw(in: CGRect(origin: .zero, size: target)) }
     }
 }

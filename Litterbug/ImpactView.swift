@@ -1,5 +1,6 @@
 import SwiftUI
 import Observation
+import CoreLocation
 
 struct Cleanup: Identifiable, Equatable {
     let id: String
@@ -7,9 +8,14 @@ struct Cleanup: Identifiable, Equatable {
     let place: String
     let cleanedAt: Date
     let image: UIImage?
+    /// Front-camera shot from the moment of pickup (BeReal-style), if one was taken.
+    var selfie: UIImage? = nil
+    var cleanedBy: String? = nil
+    var location: CLLocation? = nil
 
     static func == (lhs: Cleanup, rhs: Cleanup) -> Bool {
         lhs.id == rhs.id && lhs.cleanedAt == rhs.cleanedAt && lhs.type == rhs.type
+            && lhs.cleanedBy == rhs.cleanedBy && (lhs.selfie == nil) == (rhs.selfie == nil)
     }
 }
 
@@ -26,7 +32,7 @@ final class ImpactStore {
     }
 
     private func refresh() async {
-        guard let documents = try? await FirestoreClient.shared.list("litter", fields: ["type", "place", "photo", "status", "cleanedAt"]) else { return }
+        guard let documents = try? await FirestoreClient.shared.list("litter", fields: ["type", "place", "photo", "selfie", "status", "cleanedAt", "cleanedBy", "lat", "lon"]) else { return }
         let latest = documents
             .filter { $0["status"]?.stringValue == "cleaned" }
             .map { document in
@@ -35,7 +41,12 @@ final class ImpactStore {
                     type: document["type"]?.stringValue ?? "litter",
                     place: document["place"]?.stringValue ?? "Nearby",
                     cleanedAt: document["cleanedAt"]?.date ?? .distantPast,
-                    image: document["photo"]?.data.flatMap(UIImage.init(data:))
+                    image: document["photo"]?.data.flatMap(UIImage.init(data:)),
+                    selfie: document["selfie"]?.data.flatMap(UIImage.init(data:)),
+                    cleanedBy: document["cleanedBy"]?.stringValue,
+                    location: document["lat"]?.number.flatMap { lat in
+                        document["lon"]?.number.map { CLLocation(latitude: lat, longitude: $0) }
+                    }
                 )
             }
             .sorted { $0.cleanedAt > $1.cleanedAt }
@@ -45,74 +56,271 @@ final class ImpactStore {
     }
 }
 
+/// The Social tab (was Impact): your profile up top, then everyone's pickups as a scrolling feed.
 struct ImpactView: View {
     @State private var store = ImpactStore()
+    @State private var account = AccountStore.shared
+    @State private var litter = LitterStore.shared
     @Environment(\.isTabActive) private var isTabActive
-    @Namespace private var monthZoom
+    @State private var feed: Feed = .local
 
-    private var thisYearCount: Int {
-        store.cleanups.filter { Calendar.current.isDate($0.cleanedAt, equalTo: .now, toGranularity: .year) }.count
+    enum Feed: String, CaseIterable { case local = "Local", friends = "Friends" }
+
+    /// Local: everyone within ~15 km of you (everyone, until we know where you are).
+    /// Friends: posts by people on your friends list.
+    private var posts: [Cleanup] {
+        switch feed {
+        case .local:
+            guard let here = LocationTracker.shared.location else { return store.cleanups }
+            return store.cleanups.filter { ($0.location?.distance(from: here) ?? 0) <= 15_000 }
+        case .friends:
+            let friends = Set(account.current?.friends ?? [])
+            return store.cleanups.filter { $0.cleanedBy.map(friends.contains) ?? false }
+        }
     }
 
-    /// Cleanups grouped by calendar month, newest month first.
-    private var months: [(month: Date, cleanups: [Cleanup])] {
-        let calendar = Calendar.current
-        let groups = Dictionary(grouping: store.cleanups) {
-            calendar.date(from: calendar.dateComponents([.year, .month], from: $0.cleanedAt)) ?? $0.cleanedAt
-        }
-        return groups.keys.sorted(by: >).map { ($0, groups[$0]!.sorted { $0.cleanedAt > $1.cleanedAt }) }
+    private var thisMonthCount: Int {
+        store.cleanups.filter { Calendar.current.isDate($0.cleanedAt, equalTo: .now, toGranularity: .month) }.count
+    }
+
+    private var myPieces: Int {
+        store.cleanups.filter { $0.cleanedBy == account.currentID }.count
     }
 
     var body: some View {
-        NavigationStack {
         ScrollView {
-            VStack(spacing: 28) {
-                PageTitle("Impact")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                VStack(spacing: 0) {
-                    Text("\(thisYearCount)")
-                        .font(.custom("CheeseMilky", size: 110))
-                        .contentTransition(.numericText())
-                    Text("\(thisYearCount == 1 ? "piece" : "pieces") of litter\ncleaned up in \(String(Calendar.current.component(.year, from: .now)))")
-                        .font(.custom("MoreSugarRegular", size: 24))
-                        .multilineTextAlignment(.center)
+            VStack(spacing: 18) {
+                VStack(alignment: .leading, spacing: 4) {
+                    PageTitle("Social")
+                    FeedPicker(selection: $feed)
+                        .padding(.top, 10)
                 }
-                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                ForEach(months, id: \.month) { group in
-                    NavigationLink(value: group.month) {
-                        MonthCollage(month: group.month, cleanups: group.cleanups)
-                            .matchedTransitionSource(id: group.month, in: monthZoom)
-                    }
-                    .buttonStyle(.plain)
-                        // Each month fades and rises in as it scrolls up from the bottom.
+                if posts.isEmpty {
+                    Text(feed == .friends ? "No posts from friends yet" : "Nothing picked up nearby yet")
+                        .font(.custom("MoreSugarRegular", size: 17))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .padding(.top, 40)
+                }
+
+                ForEach(posts) { cleanup in
+                    PostCard(cleanup: cleanup, author: account.users.first { $0.id == cleanup.cleanedBy })
+                        // Gentle: the next post stays clearly visible below the current one.
                         .scrollTransition(topLeading: .identity, bottomTrailing: .interactive) { content, phase in
                             content
-                                .opacity(1 - abs(phase.value) * 0.9)
-                                .scaleEffect(1 - abs(phase.value) * 0.08)
-                                .offset(y: phase.value * 60)
+                                .opacity(1 - abs(phase.value) * 0.2)
+                                .scaleEffect(1 - abs(phase.value) * 0.03)
                         }
                 }
             }
             .padding(.horizontal, 30)
             .padding(.bottom, 44)
             .animation(.spring(response: 0.4, dampingFraction: 0.8), value: store.cleanups)
+            .animation(.spring(response: 0.4, dampingFraction: 0.85), value: feed)
         }
+        // Posts stop at the top of the safe area instead of sliding up under the clock / island.
+        .clipped()
         .background(Color.appBackground)
-        .toolbar(.hidden, for: .navigationBar)
-        // The zoom transition shrinks the screen behind; show green there, not black.
-        .containerBackground(Color.appBackground, for: .navigation)
-        .navigationDestination(for: Date.self) { month in
-            // Zooms out of the tapped collage (like Tallo's product page) instead of sliding in.
-            MonthDetailView(month: month, cleanups: months.first { $0.month == month }?.cleanups ?? [])
-                .navigationTransition(.zoom(sourceID: month, in: monthZoom))
-        }
-        }
+        .task { await account.refresh() }
         .task(id: isTabActive) {
             guard isTabActive else { return }
             await store.poll()
         }
+    }
+}
+
+struct ProfileHeader: View {
+    let user: UserProfile
+    let pieces: Int
+    let points: Int
+    let streak: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 16) {
+                AvatarView(name: user.name, size: 64)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(user.name)
+                        .font(.custom("CheeseMilky", size: 28))
+                    Text("@\(user.username)\(user.school.isEmpty ? "" : " · \(user.school)")")
+                        .font(.custom("MoreSugarRegular", size: 14))
+                        .opacity(0.7)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 0) {
+                stat("\(pieces)", pieces == 1 ? "piece" : "pieces")
+                divider
+                stat("\(points)", "points")
+                divider
+                stat("\(streak)", streak == 1 ? "day streak" : "day streak")
+            }
+            .padding(.vertical, 12)
+            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(.white, lineWidth: 2))
+        }
+        .foregroundStyle(.white)
+    }
+
+    private var divider: some View {
+        Rectangle().fill(.white.opacity(0.3)).frame(width: 1.5, height: 34)
+    }
+
+    private func stat(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 0) {
+            Text(value)
+                .font(.custom("CheeseMilky", size: 28))
+                .contentTransition(.numericText())
+            Text(label)
+                .font(.custom("MoreSugarRegular", size: 13))
+                .opacity(0.7)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// Local | Friends switch: two capsules in the row style, the selected one filled white.
+struct FeedPicker: View {
+    @Binding var selection: ImpactView.Feed
+    @Namespace private var pill
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(ImpactView.Feed.allCases, id: \.self) { feed in
+                Button {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { selection = feed }
+                } label: {
+                    Text(feed.rawValue)
+                        .font(.custom("MoreSugarRegular", size: 17))
+                        .foregroundStyle(selection == feed ? Color.appBackground : .white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background {
+                            if selection == feed {
+                                Capsule().fill(.white).matchedGeometryEffect(id: "pill", in: pill)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .overlay(Capsule().stroke(.white, lineWidth: 2))
+    }
+}
+
+/// Community total for the month, in the white-outline style of the rows, with a little pile of
+/// the colored litter icons.
+struct CommunityStat: View {
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Text("\(count)")
+                .font(.custom("CheeseMilky", size: 40))
+                .contentTransition(.numericText())
+                .monospacedDigit()
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text(count == 1 ? "piece of litter" : "pieces of litter")
+                    .font(.custom("MoreSugarRegular", size: 17))
+                Text("picked up in Binghamton this month")
+                    .font(.custom("MoreSugarRegular", size: 13))
+                    .opacity(0.7)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+
+            Spacer(minLength: 0)
+
+            ZStack {
+                ForEach(Array(["litter-bottle-color", "litter-can-color", "litter-cup-color"].enumerated()), id: \.offset) { index, name in
+                    Image(name)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 26, height: 26)
+                        .rotationEffect(.degrees([-14, 6, 18][index]))
+                        .offset(x: CGFloat(index - 1) * 11, y: index == 1 ? -5 : 3)
+                }
+            }
+            .frame(width: 52)
+        }
+        .foregroundStyle(.white)
+        .animation(.spring, value: count)
+        .padding(.leading, 20)
+        .padding(.trailing, 14)
+        .padding(.vertical, 8)
+        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(.white, lineWidth: 2))
+    }
+}
+
+/// One pickup in the feed: who/where/when, the photo with the selfie inset top-left, and what it was.
+struct PostCard: View {
+    let cleanup: Cleanup
+    let author: UserProfile?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                AvatarView(name: author?.name ?? "?", size: 36, inverted: true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(author?.name ?? "Someone")
+                        .font(.custom("MoreSugarRegular", size: 17))
+                    HStack(spacing: 3) {
+                        Image(systemName: "mappin")
+                            .font(.system(size: 9, weight: .bold))
+                        Text("\(cleanup.place) · \(cleanup.cleanedAt.formatted(.relative(presentation: .named)))")
+                            .font(.custom("MoreSugarRegular", size: 13))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                    .opacity(0.6)
+                }
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(Color.ink)
+
+            Color(white: 0.85)
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    if let image = cleanup.image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(alignment: .topLeading) {
+                    if let selfie = cleanup.selfie {
+                        Image(uiImage: selfie)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: 84, height: 112)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.white, lineWidth: 3))
+                            .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
+                            .padding(10)
+                    }
+                }
+
+            HStack(alignment: .lastTextBaseline) {
+                Text("Picked up a \(LitterType.displayName(cleanup.type).lowercased())")
+                    .font(.custom("MoreSugarRegular", size: 17))
+                Spacer()
+                Text("+\(LeaderboardView.pointsPerPiece) pts")
+                    .font(.custom("MoreSugarRegular", size: 14))
+                    .opacity(0.6)
+            }
+            .foregroundStyle(Color.ink)
+            .padding(.horizontal, 2)
+        }
+        .padding(12)
+        .background(.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
     }
 }
 

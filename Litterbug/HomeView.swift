@@ -28,6 +28,7 @@ struct HomeView: View {
     @State private var cameraPin: LitterPin?
     @State private var camera = Camera()
     @State private var capturedPhoto: UIImage?
+    @State private var capturedSelfie: UIImage?
 
     private static let pickupRadius: CLLocationDistance = 9.144 // 30 ft
 
@@ -45,16 +46,6 @@ struct HomeView: View {
         return pin
     }
 
-    private func handle(_ pin: LitterPin) {
-        guard let here = tracker.location else { return }
-        if pin.location.distance(from: here) <= Self.pickupRadius {
-            route = []
-            routePinID = nil
-            cameraPin = pin
-        } else {
-            Task { await showRoute(from: here.coordinate, to: pin) }
-        }
-    }
 
     /// Bottom list: always draw the route to the piece (the map's pick-up button handles the camera).
     private func routeTo(_ pin: LitterPin) {
@@ -76,7 +67,9 @@ struct HomeView: View {
         }
         Task {
             guard let image = await camera.capture() else { return }
+            let selfie = await camera.captureSelfie()
             capturedPhoto = image
+            capturedSelfie = selfie
             cameraPin = nil
             captureTarget = pin
         }
@@ -151,7 +144,7 @@ struct HomeView: View {
         ForEvery(store.pins) { pin in
             MapViewAnnotation(coordinate: pin.coordinate) {
                 PinView(pin: pin, ready: mapLoaded)
-                    .onTapGesture { handle(pin) }
+                    .onTapGesture { routeTo(pin) }
             }
             .allowOverlap(true)
             .allowOverlapWithPuck(true)
@@ -344,8 +337,8 @@ struct HomeView: View {
                 routePinID = nil
             }
         }
-        .fullScreenCover(item: $captureTarget, onDismiss: { capturedPhoto = nil }) { pin in
-            CaptureFlow(pin: pin, location: tracker.location, photo: capturedPhoto)
+        .fullScreenCover(item: $captureTarget, onDismiss: { capturedPhoto = nil; capturedSelfie = nil }) { pin in
+            CaptureFlow(pin: pin, location: tracker.location, photo: capturedPhoto, selfie: capturedSelfie)
         }
     }
 }
@@ -471,6 +464,8 @@ struct StreakBadge: View {
             Text("\(days)")
                 .font(.custom("MoreSugarRegular", size: 16))
                 .contentTransition(.numericText())
+                // MoreSugar's digits sit high in their line box; drop them onto the flame's center.
+                .offset(y: 1.5)
         }
         .foregroundStyle(.white)
         .padding(.leading, 9)
