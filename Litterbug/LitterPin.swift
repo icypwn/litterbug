@@ -6,6 +6,8 @@ struct LitterPin: Identifiable, Equatable {
     let lat: Double
     let lon: Double
     let type: String
+    /// Reward for picking it up, set by the drone from Gemini's 1-10 score (score x 10).
+    var points: Int = LitterType.defaultPoints
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: lat, longitude: lon)
@@ -22,6 +24,8 @@ struct LitterPin: Identifiable, Equatable {
 
 enum LitterType {
     static let all = ["bottle", "can", "bag", "wrapper", "cup", "litter"]
+    /// Points for litter the drone didn't score (older pins, manual ones).
+    static let defaultPoints = 10
 
     static func displayName(_ type: String) -> String {
         switch type {

@@ -87,6 +87,7 @@ struct FirestoreValue: Codable {
 
     static func string(_ value: String) -> FirestoreValue { FirestoreValue(stringValue: value) }
     static func double(_ value: Double) -> FirestoreValue { FirestoreValue(doubleValue: value) }
+    static func integer(_ value: Int) -> FirestoreValue { FirestoreValue(integerValue: String(value)) }
     static func bytes(_ value: Data) -> FirestoreValue { FirestoreValue(bytesValue: value.base64EncodedString()) }
     static func timestamp(_ value: Date) -> FirestoreValue {
         FirestoreValue(timestampValue: ISO8601DateFormatter().string(from: value))
